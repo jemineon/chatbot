@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi-learning-api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount only the app folder so code changes are reflected during study.
+      - ./app:/code/app
+    depends_on:
+      mysql:
+        # Wait until MySQL is actually ready before trying a DB ping.
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    container_name: fastapi-learning-mysql
+    command: --default-authentication-plugin=mysql_native_password
+    env_file:
+      - .env
+    ports:
+      - "3306:3306"
+    volumes:
+      # Named volume keeps MySQL data even if the container is recreated.
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  mysql_data:
