@@ -1,50 +1,75 @@
+import os
 from typing import Any, Dict, Optional
 
-import pymysql
-from pymysql.connections import Connection
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.config import settings
+
+def get_database_url() -> str:
+    host = os.getenv("MYSQL_HOST", "")
+    port = os.getenv("MYSQL_PORT", "")
+    user = os.getenv("MYSQL_USER", "")
+    password = os.getenv("MYSQL_PASSWORD", "")
+    database = os.getenv("MYSQL_DATABASE", "")
+
+    required_env = {
+        "MYSQL_HOST": host,
+        "MYSQL_PORT": port,
+        "MYSQL_USER": user,
+        "MYSQL_PASSWORD": password,
+        "MYSQL_DATABASE": database,
+    }
+    missing = [name for name, value in required_env.items() if not value]
+
+    if missing:
+        missing_text = ", ".join(missing)
+        raise ValueError(f"Missing required environment variables: {missing_text}")
+
+    return f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
 
-def create_db_connection() -> Connection:
-    # We keep the connection layer simple so beginners can verify MySQL first
-    # and add SQLAlchemy or an ORM later.
-    return pymysql.connect(
-        host=settings.mysql_host,
-        port=settings.mysql_port,
-        user=settings.mysql_user,
-        password=settings.mysql_password,
-        database=settings.mysql_database,
-        connect_timeout=5,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+def create_db_engine() -> Engine:
+    # pool_pre_ping helps detect stale connections in a simple way.
+    return create_engine(get_database_url(), pool_pre_ping=True)
 
 
 def check_db_connection() -> Dict[str, Any]:
-    connection: Optional[Connection] = None
+    host = os.getenv("MYSQL_HOST", "")
+    database = os.getenv("MYSQL_DATABASE", "")
+    engine: Optional[Engine] = None
 
     try:
-        connection = create_db_connection()
+        engine = create_db_engine()
 
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1 AS ping")
-            result = cursor.fetchone()
+        with engine.connect() as connection:
+            ping = connection.execute(text("SELECT 1 AS ping")).scalar()
 
         return {
             "status": "ok",
             "message": "MySQL connection succeeded.",
-            "database": settings.mysql_database,
-            "host": settings.mysql_host,
-            "ping": result["ping"] if result else None,
+            "host": host,
+            "database": database,
+            "ping": ping,
         }
-    except pymysql.MySQLError as exc:
+    except ValueError as exc:
         return {
             "status": "error",
-            "message": "MySQL connection failed.",
-            "database": settings.mysql_database,
-            "host": settings.mysql_host,
+            "message": "Database settings are missing. Check your .env file and Docker Compose environment variables.",
+            "host": host,
+            "database": database,
             "error": str(exc),
         }
+    except SQLAlchemyError as exc:
+        root_error = str(getattr(exc, "orig", exc))
+
+        return {
+            "status": "error",
+            "message": "MySQL connection failed. Make sure the db container is running and the MYSQL_* values are correct.",
+            "host": host,
+            "database": database,
+            "error": root_error,
+        }
     finally:
-        if connection is not None:
-            connection.close()
+        if engine is not None:
+            engine.dispose()

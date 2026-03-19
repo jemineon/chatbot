@@ -12,13 +12,14 @@ services:
       # Mount only the app folder so code changes are reflected during study.
       - ./app:/code/app
     depends_on:
-      mysql:
+      db:
         # Wait until MySQL is actually ready before trying a DB ping.
         condition: service_healthy
 
-  mysql:
+  db:
+    # Pin a stable major version so learning setup does not break on latest-image changes.
     image: mysql:8.0
-    container_name: fastapi-learning-mysql
+    container_name: db-container
     command: --default-authentication-plugin=mysql_native_password
     env_file:
       - .env
@@ -28,7 +29,7 @@ services:
       # Named volume keeps MySQL data even if the container is recreated.
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent" ]
       interval: 5s
       timeout: 5s
       retries: 20

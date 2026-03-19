@@ -1,6 +1,5 @@
-from typing import Any, Dict
-
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
 
 from app.db.connection import check_db_connection
 
@@ -14,13 +13,8 @@ def health_check() -> dict[str, str]:
 
 
 @router.get("/health/db")
-def health_db_check() -> Dict[str, Any]:
+def health_db_check() -> JSONResponse:
     db_status = check_db_connection()
+    status_code = status.HTTP_200_OK if db_status["status"] == "ok" else status.HTTP_503_SERVICE_UNAVAILABLE
 
-    if db_status["status"] != "ok":
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=db_status,
-        )
-
-    return db_status
+    return JSONResponse(status_code=status_code, content=db_status)
