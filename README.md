@@ -13,7 +13,8 @@
 ├── README.md
 ├── app/
 │   ├── api/
-│   │   └── health.py
+│   │   ├── health.py
+│   │   └── messages.py
 │   ├── db/
 │   │   ├── connection.py
 │   │   └── schema.py
@@ -33,6 +34,11 @@ FastAPI 앱의 진입점입니다.
 
 헬스체크 API를 모아 둔 파일입니다.  
 앱이 살아 있는지, DB 연결이 되는지 가장 먼저 확인할 수 있도록 분리했습니다.
+
+### `app/api/messages.py`
+
+`messages` 테이블에 대해 가장 기본적인 CRUD API를 담는 파일입니다.  
+지금 단계에서는 repository나 service 레이어 없이, SQLAlchemy Core 쿼리를 직접 보면서 흐름을 익히는 데 집중합니다.
 
 ### `app/db/connection.py`
 
@@ -112,6 +118,46 @@ MySQL 연결이 되는지 `SELECT 1 AS ping`으로 확인합니다.
 }
 ```
 
+### `POST /api/v1/messages`
+
+메시지 1개를 저장합니다.
+
+예시 요청 본문:
+
+```json
+{
+  "room_id": 1,
+  "role": "user",
+  "message_order": 1,
+  "content": "안녕하세요"
+}
+```
+
+### `GET /api/v1/messages`
+
+전체 메시지 목록을 조회합니다.  
+`room_id` 쿼리 파라미터를 주면 특정 방 메시지만 볼 수 있습니다.
+
+예시:
+
+```text
+GET /api/v1/messages
+GET /api/v1/messages?room_id=1
+```
+
+### `GET /api/v1/messages/{message_id}`
+
+메시지 1개를 조회합니다.
+
+### `PUT /api/v1/messages/{message_id}`
+
+메시지 1개를 수정합니다.  
+요청 본문은 `POST /api/v1/messages`와 같은 형태를 사용합니다.
+
+### `DELETE /api/v1/messages/{message_id}`
+
+메시지 1개를 삭제합니다.
+
 ## messages 테이블 구조
 
 `app/db/schema.py`에는 아래 컬럼이 정의되어 있습니다.
@@ -139,6 +185,7 @@ docker compose exec -T api python -c "from app.db.connection import create_db_en
 - DB 연결 코드와 테이블 정의 코드를 분리해서 볼 수 있습니다.
 - SQLAlchemy ORM 없이도 테이블을 만들 수 있다는 점을 이해할 수 있습니다.
 - 다음 단계에서 ORM이나 Alembic을 붙이기 전에, Core 방식의 기본 흐름을 먼저 익힐 수 있습니다.
+- 테이블을 만든 뒤에는 SQLAlchemy Core `insert/select/update/delete`로 바로 CRUD API를 구현할 수 있습니다.
 
 ## 이번 단계에서 일부러 넣지 않은 것
 
