@@ -4,6 +4,8 @@
 채팅 응답은 Google Gemini API를 호출하고, 학습용 기본값으로 비용 효율이 높은 `gemini-2.5-flash-lite` 모델을 사용합니다.  
 아직 ORM 모델, Session, Alembic, repository/service 레이어는 넣지 않았고, `engine`과 SQL 문장 자체를 읽는 데 집중합니다.
 
+다른 컴퓨터에서 처음 실행할 때는 [RUN_ON_ANOTHER_COMPUTER.md](/Users/hanwha/Desktop/jemin/work/chatbot_project/RUN_ON_ANOTHER_COMPUTER.md#L1) 문서를 먼저 보는 것을 추천합니다.
+
 ## 프로젝트 구조
 
 ```text
