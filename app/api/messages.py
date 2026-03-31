@@ -5,12 +5,21 @@ from fastapi import APIRouter, Path, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.db.connection import create_db_engine
-from app.db.schema import messages, rooms
+from app.db.sql.messages import (
+    DELETE_MESSAGE_SQL,
+    INSERT_MESSAGE_SQL,
+    LIST_ALL_MESSAGES_SQL,
+    LIST_MESSAGES_BY_ROOM_SQL,
+    SELECT_MESSAGE_BY_ID_SQL,
+    SELECT_NEXT_MESSAGE_ORDER_SQL,
+    UPDATE_MESSAGE_SQL,
+)
+from app.db.sql.rooms import CHECK_ROOM_EXISTS_SQL
 
 
 router = APIRouter(tags=["Messages"])
@@ -79,15 +88,26 @@ def build_error_response(status_code: int, message: str) -> JSONResponse:
 
 
 def room_exists(connection: Any, room_id: int) -> bool:
-    row = connection.execute(select(rooms.c.id).where(rooms.c.id == room_id)).first()
+    row = connection.execute(
+        text(CHECK_ROOM_EXISTS_SQL),
+        {"room_id": room_id},
+    ).first()
     return row is not None
 
 
 def get_next_message_order(connection: Any, room_id: int) -> int:
-    current_max = connection.execute(
-        select(func.max(messages.c.message_order)).where(messages.c.room_id == room_id)
+    next_order = connection.execute(
+        text(SELECT_NEXT_MESSAGE_ORDER_SQL),
+        {"room_id": room_id},
     ).scalar()
-    return 1 if current_max is None else int(current_max) + 1
+    return int(next_order)
+
+
+def fetch_message_by_id(connection: Any, message_id: int) -> Optional[Mapping[str, Any]]:
+    return connection.execute(
+        text(SELECT_MESSAGE_BY_ID_SQL),
+        {"message_id": message_id},
+    ).mappings().first()
 
 
 @router.post("/messages")
@@ -105,17 +125,17 @@ def create_message(payload: MessageCreate) -> JSONResponse:
                 )
 
             next_message_order = get_next_message_order(connection, payload.room_id)
-
             result = connection.execute(
-                insert(messages).values(
-                    **payload.model_dump(),
-                    message_order=next_message_order,
-                )
+                text(INSERT_MESSAGE_SQL),
+                {
+                    "room_id": payload.room_id,
+                    "role": payload.role,
+                    "message_order": next_message_order,
+                    "content": payload.content,
+                },
             )
-            message_id = int(result.inserted_primary_key[0])
-            row = connection.execute(
-                select(messages).where(messages.c.id == message_id)
-            ).mappings().first()
+            message_id = int(result.lastrowid)
+            row = fetch_message_by_id(connection, message_id)
 
         response_payload = {
             "status": "ok",
@@ -155,17 +175,11 @@ def list_messages(room_id: Optional[int] = Query(default=None, ge=1)) -> JSONRes
 
     try:
         engine = create_db_engine()
-        statement = select(messages).order_by(
-            messages.c.room_id,
-            messages.c.message_order,
-            messages.c.id,
-        )
-
-        if room_id is not None:
-            statement = statement.where(messages.c.room_id == room_id)
+        query = LIST_MESSAGES_BY_ROOM_SQL if room_id is not None else LIST_ALL_MESSAGES_SQL
+        params: Dict[str, Any] = {"room_id": room_id} if room_id is not None else {}
 
         with engine.connect() as connection:
-            rows = connection.execute(statement).mappings().all()
+            rows = connection.execute(text(query), params).mappings().all()
 
         items = [serialize_message(row) for row in rows]
         response_payload = {
@@ -196,9 +210,7 @@ def get_message(message_id: int = Path(ge=1)) -> JSONResponse:
         engine = create_db_engine()
 
         with engine.connect() as connection:
-            row = connection.execute(
-                select(messages).where(messages.c.id == message_id)
-            ).mappings().first()
+            row = fetch_message_by_id(connection, message_id)
 
         if row is None:
             return build_error_response(status.HTTP_404_NOT_FOUND, "Message not found.")
@@ -230,9 +242,7 @@ def update_message(message_id: int = Path(ge=1), payload: MessageUpdate = ...) -
         engine = create_db_engine()
 
         with engine.begin() as connection:
-            existing_message = connection.execute(
-                select(messages).where(messages.c.id == message_id)
-            ).mappings().first()
+            existing_message = fetch_message_by_id(connection, message_id)
 
             if existing_message is None:
                 return build_error_response(status.HTTP_404_NOT_FOUND, "Message not found.")
@@ -249,20 +259,20 @@ def update_message(message_id: int = Path(ge=1), payload: MessageUpdate = ...) -
                 new_message_order = get_next_message_order(connection, payload.room_id)
 
             result = connection.execute(
-                update(messages)
-                .where(messages.c.id == message_id)
-                .values(
-                    **payload.model_dump(),
-                    message_order=new_message_order,
-                )
+                text(UPDATE_MESSAGE_SQL),
+                {
+                    "room_id": payload.room_id,
+                    "role": payload.role,
+                    "message_order": new_message_order,
+                    "content": payload.content,
+                    "message_id": message_id,
+                },
             )
 
             if result.rowcount == 0:
                 return build_error_response(status.HTTP_404_NOT_FOUND, "Message not found.")
 
-            row = connection.execute(
-                select(messages).where(messages.c.id == message_id)
-            ).mappings().first()
+            row = fetch_message_by_id(connection, message_id)
 
         response_payload = {
             "status": "ok",
@@ -304,14 +314,15 @@ def delete_message(message_id: int = Path(ge=1)) -> JSONResponse:
         engine = create_db_engine()
 
         with engine.begin() as connection:
-            row = connection.execute(
-                select(messages).where(messages.c.id == message_id)
-            ).mappings().first()
+            row = fetch_message_by_id(connection, message_id)
 
             if row is None:
                 return build_error_response(status.HTTP_404_NOT_FOUND, "Message not found.")
 
-            connection.execute(delete(messages).where(messages.c.id == message_id))
+            connection.execute(
+                text(DELETE_MESSAGE_SQL),
+                {"message_id": message_id},
+            )
 
         response_payload = {
             "status": "ok",

@@ -4,10 +4,10 @@ import unittest
 from typing import Any, Dict, Optional, Tuple
 from urllib import error, request
 
-from sqlalchemy import delete
+from sqlalchemy import text
 
 from app.db.connection import create_db_engine
-from app.db.schema import create_tables, messages, rooms
+from app.db.schema import create_tables
 
 
 class MessagesApiIntegrationTestCase(unittest.TestCase):
@@ -91,8 +91,8 @@ class MessagesApiIntegrationTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.debug("Cleaning rooms/messages tables so the API test starts from a known state.")
         with self.engine.begin() as connection:
-            connection.execute(delete(messages))
-            connection.execute(delete(rooms))
+            connection.execute(text("DELETE FROM messages"))
+            connection.execute(text("DELETE FROM rooms"))
 
     def create_room_via_api(self, name: str = "test room") -> int:
         status_code, body = self.request_json(
@@ -123,6 +123,85 @@ class MessagesApiIntegrationTestCase(unittest.TestCase):
         self.assertEqual(body["count"], 1, f"Expected one room in list, got {body}")
         self.assertEqual(body["items"][0]["id"], room_id, f"Expected listed room id={room_id}, got {body}")
         self.assertEqual(body["items"][0]["name"], "api room", f"Expected room name='api room', got {body}")
+
+    def test_room_detail_api(self) -> None:
+        room_id = self.create_room_via_api(name="detail room")
+
+        status_code, body = self.request_json("GET", f"/api/v1/rooms/{room_id}")
+        self.debug(f"Room detail response -> status={status_code}, body={body}")
+
+        self.assertEqual(status_code, 200, f"Expected HTTP 200 for room detail, got {status_code}. Body: {body}")
+        self.assertEqual(body["data"]["id"], room_id, f"Expected room id={room_id}, got {body}")
+        self.assertEqual(body["data"]["name"], "detail room", f"Expected room name='detail room', got {body}")
+
+    def test_room_delete_api(self) -> None:
+        room_id = self.create_room_via_api(name="delete room")
+
+        delete_status, delete_body = self.request_json("DELETE", f"/api/v1/rooms/{room_id}")
+        self.debug(f"Room delete response -> status={delete_status}, body={delete_body}")
+
+        self.assertEqual(delete_status, 200, f"Expected HTTP 200 for room delete, got {delete_status}. Body: {delete_body}")
+        self.assertEqual(delete_body["data"]["id"], room_id, f"Expected deleted room id={room_id}, got {delete_body}")
+
+        detail_status, detail_body = self.request_json("GET", f"/api/v1/rooms/{room_id}")
+        self.debug(f"Room detail after delete -> status={detail_status}, body={detail_body}")
+
+        self.assertEqual(detail_status, 404, f"Expected HTTP 404 after room delete, got {detail_status}. Body: {detail_body}")
+        self.assertEqual(detail_body["message"], "Room not found.", f"Unexpected room detail body after delete: {detail_body}")
+
+    def test_room_delete_is_blocked_when_messages_exist(self) -> None:
+        room_id = self.create_room_via_api(name="blocked delete room")
+
+        create_status, create_body = self.request_json(
+            "POST",
+            "/api/v1/messages",
+            payload={
+                "room_id": room_id,
+                "role": "user",
+                "content": "message keeps room alive",
+            },
+        )
+        self.debug(f"Message create before room delete -> status={create_status}, body={create_body}")
+        self.assertEqual(create_status, 201, f"Expected message create to succeed, got {create_status}. Body: {create_body}")
+
+        delete_status, delete_body = self.request_json("DELETE", f"/api/v1/rooms/{room_id}")
+        self.debug(f"Blocked room delete response -> status={delete_status}, body={delete_body}")
+
+        self.assertEqual(delete_status, 409, f"Expected HTTP 409 when room still has messages, got {delete_status}. Body: {delete_body}")
+        self.assertEqual(
+            delete_body["message"],
+            "Room cannot be deleted because messages still exist in it. Delete the messages first.",
+            f"Unexpected blocked delete message: {delete_body}",
+        )
+
+    def test_chat_api_creates_user_and_assistant_messages(self) -> None:
+        room_id = self.create_room_via_api(name="chat room")
+
+        chat_status, chat_body = self.request_json(
+            "POST",
+            "/api/v1/chat",
+            payload={
+                "room_id": room_id,
+                "content": "hello chat api",
+            },
+        )
+        self.debug(f"Chat response -> status={chat_status}, body={chat_body}")
+
+        self.assertEqual(chat_status, 201, f"Expected HTTP 201 for chat, got {chat_status}. Body: {chat_body}")
+        self.assertEqual(chat_body["status"], "ok", f"Unexpected chat body: {chat_body}")
+        self.assertEqual(chat_body["room_id"], room_id, f"Expected room_id={room_id}, got {chat_body}")
+        self.assertEqual(chat_body["user_message"]["role"], "user", f"Expected user role, got {chat_body}")
+        self.assertEqual(chat_body["user_message"]["message_order"], 1, f"Expected user message_order=1, got {chat_body}")
+        self.assertEqual(chat_body["user_message"]["content"], "hello chat api", f"Unexpected user message body: {chat_body}")
+        self.assertEqual(chat_body["assistant_message"]["role"], "assistant", f"Expected assistant role, got {chat_body}")
+        self.assertEqual(chat_body["assistant_message"]["message_order"], 2, f"Expected assistant message_order=2, got {chat_body}")
+        self.assertEqual(chat_body["assistant_message"]["content"], "Echo: hello chat api", f"Unexpected assistant reply: {chat_body}")
+
+        list_status, list_body = self.request_json("GET", f"/api/v1/messages?room_id={room_id}")
+        self.debug(f"Chat room messages response -> status={list_status}, body={list_body}")
+
+        self.assertEqual(list_status, 200, f"Expected HTTP 200 for room messages list, got {list_status}. Body: {list_body}")
+        self.assertEqual(list_body["count"], 2, f"Expected two stored messages after chat, got {list_body}")
 
     def test_messages_api_crud_flow(self) -> None:
         room_id = self.create_room_via_api()

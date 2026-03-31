@@ -1,10 +1,10 @@
 import unittest
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.db.connection import create_db_engine
-from app.db.schema import create_tables, drop_tables, messages, rooms
+from app.db.schema import create_tables, drop_tables
 
 
 class MessagesCrudDbTestCase(unittest.TestCase):
@@ -16,7 +16,7 @@ class MessagesCrudDbTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.debug("Creating SQLAlchemy engine for MySQL test database.")
         cls.engine = create_db_engine()
-        cls.debug("Recreating rooms/messages tables so constraint tests start from the latest schema.")
+        cls.debug("Recreating rooms/messages tables so raw SQL tests start from the latest schema.")
         drop_tables(cls.engine)
         create_tables(cls.engine)
 
@@ -28,33 +28,49 @@ class MessagesCrudDbTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.debug("Cleaning rooms/messages tables so each test starts from a known state.")
         with self.engine.begin() as connection:
-            connection.execute(delete(messages))
-            connection.execute(delete(rooms))
+            connection.execute(text("DELETE FROM messages"))
+            connection.execute(text("DELETE FROM rooms"))
 
     def create_room(self, name: str = "test room") -> int:
         with self.engine.begin() as connection:
-            result = connection.execute(insert(rooms).values(name=name))
-            return int(result.inserted_primary_key[0])
+            result = connection.execute(
+                text("INSERT INTO rooms (name) VALUES (:name)"),
+                {"name": name},
+            )
+            return int(result.lastrowid)
 
     def fetch_message(self, message_id: int):
         with self.engine.connect() as connection:
             return connection.execute(
-                select(messages).where(messages.c.id == message_id)
+                text(
+                    """
+                    SELECT id, room_id, role, message_order, content, created_at
+                    FROM messages
+                    WHERE id = :message_id
+                    """
+                ),
+                {"message_id": message_id},
             ).mappings().first()
 
     def test_messages_crud_flow(self) -> None:
         room_id = self.create_room()
-        self.debug("Step 1: inserting a sample message row.")
+        self.debug("Step 1: inserting a sample message row with raw SQL.")
         with self.engine.begin() as connection:
             insert_result = connection.execute(
-                insert(messages).values(
-                    room_id=room_id,
-                    role="user",
-                    message_order=1,
-                    content="first message",
-                )
+                text(
+                    """
+                    INSERT INTO messages (room_id, role, message_order, content)
+                    VALUES (:room_id, :role, :message_order, :content)
+                    """
+                ),
+                {
+                    "room_id": room_id,
+                    "role": "user",
+                    "message_order": 1,
+                    "content": "first message",
+                },
             )
-            message_id = int(insert_result.inserted_primary_key[0])
+            message_id = int(insert_result.lastrowid)
         self.debug(f"Inserted message id={message_id}.")
 
         created_message = self.fetch_message(message_id)
@@ -75,17 +91,26 @@ class MessagesCrudDbTestCase(unittest.TestCase):
         )
         self.assertIsNotNone(created_message["created_at"], "Expected created_at to be automatically set.")
 
-        self.debug("Step 3: updating the same row.")
+        self.debug("Step 3: updating the same row with raw SQL.")
         with self.engine.begin() as connection:
             connection.execute(
-                update(messages)
-                .where(messages.c.id == message_id)
-                .values(
-                    room_id=room_id,
-                    role="assistant",
-                    message_order=2,
-                    content="updated message",
-                )
+                text(
+                    """
+                    UPDATE messages
+                    SET room_id = :room_id,
+                        role = :role,
+                        message_order = :message_order,
+                        content = :content
+                    WHERE id = :message_id
+                    """
+                ),
+                {
+                    "room_id": room_id,
+                    "role": "assistant",
+                    "message_order": 2,
+                    "content": "updated message",
+                    "message_id": message_id,
+                },
             )
 
         updated_message = self.fetch_message(message_id)
@@ -108,9 +133,12 @@ class MessagesCrudDbTestCase(unittest.TestCase):
             f"Expected content='updated message', got {updated_message['content']}.",
         )
 
-        self.debug("Step 5: deleting the row.")
+        self.debug("Step 5: deleting the row with raw SQL.")
         with self.engine.begin() as connection:
-            connection.execute(delete(messages).where(messages.c.id == message_id))
+            connection.execute(
+                text("DELETE FROM messages WHERE id = :message_id"),
+                {"message_id": message_id},
+            )
 
         deleted_message = self.fetch_message(message_id)
         self.debug(f"Step 6: fetched row after delete -> {deleted_message}")
@@ -123,24 +151,36 @@ class MessagesCrudDbTestCase(unittest.TestCase):
 
         with self.engine.begin() as connection:
             connection.execute(
-                insert(messages).values(
-                    room_id=room_id,
-                    role="user",
-                    message_order=1,
-                    content="first",
-                )
+                text(
+                    """
+                    INSERT INTO messages (room_id, role, message_order, content)
+                    VALUES (:room_id, :role, :message_order, :content)
+                    """
+                ),
+                {
+                    "room_id": room_id,
+                    "role": "user",
+                    "message_order": 1,
+                    "content": "first",
+                },
             )
 
         self.debug("Trying to insert another message with the same room_id and message_order.")
         with self.assertRaises(IntegrityError):
             with self.engine.begin() as connection:
                 connection.execute(
-                    insert(messages).values(
-                        room_id=room_id,
-                        role="assistant",
-                        message_order=1,
-                        content="duplicate",
-                    )
+                    text(
+                        """
+                        INSERT INTO messages (room_id, role, message_order, content)
+                        VALUES (:room_id, :role, :message_order, :content)
+                        """
+                    ),
+                    {
+                        "room_id": room_id,
+                        "role": "assistant",
+                        "message_order": 1,
+                        "content": "duplicate",
+                    },
                 )
 
     def test_same_message_order_is_allowed_in_different_rooms(self) -> None:
@@ -150,24 +190,44 @@ class MessagesCrudDbTestCase(unittest.TestCase):
 
         with self.engine.begin() as connection:
             connection.execute(
-                insert(messages).values(
-                    room_id=room_one_id,
-                    role="user",
-                    message_order=1,
-                    content="room one message",
-                )
+                text(
+                    """
+                    INSERT INTO messages (room_id, role, message_order, content)
+                    VALUES (:room_id, :role, :message_order, :content)
+                    """
+                ),
+                {
+                    "room_id": room_one_id,
+                    "role": "user",
+                    "message_order": 1,
+                    "content": "room one message",
+                },
             )
             connection.execute(
-                insert(messages).values(
-                    room_id=room_two_id,
-                    role="assistant",
-                    message_order=1,
-                    content="room two message",
-                )
+                text(
+                    """
+                    INSERT INTO messages (room_id, role, message_order, content)
+                    VALUES (:room_id, :role, :message_order, :content)
+                    """
+                ),
+                {
+                    "room_id": room_two_id,
+                    "role": "assistant",
+                    "message_order": 1,
+                    "content": "room two message",
+                },
             )
 
         with self.engine.connect() as connection:
-            rows = connection.execute(select(messages).order_by(messages.c.id)).mappings().all()
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, room_id, role, message_order, content, created_at
+                    FROM messages
+                    ORDER BY id
+                    """
+                )
+            ).mappings().all()
 
         self.assertEqual(len(rows), 2, f"Expected two messages across different rooms, got {rows}")
         self.assertEqual(rows[0]["room_id"], room_one_id, f"Unexpected first row: {rows[0]}")

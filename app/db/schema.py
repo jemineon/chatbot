@@ -1,44 +1,21 @@
-from sqlalchemy import (
-    Column,
-    DateTime,
-    ForeignKey,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
-    UniqueConstraint,
-    func,
-)
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-
-metadata = MetaData()
-
-rooms = Table(
-    "rooms",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String(100), nullable=False),
-    Column("created_at", DateTime, nullable=False, server_default=func.now()),
-)
-
-messages = Table(
-    "messages",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("room_id", Integer, ForeignKey("rooms.id"), nullable=False),
-    Column("role", String(20), nullable=False),
-    Column("message_order", Integer, nullable=False),
-    Column("content", Text, nullable=False),
-    Column("created_at", DateTime, nullable=False, server_default=func.now()),
-    UniqueConstraint("room_id", "message_order", name="uq_messages_room_id_message_order"),
+from app.db.sql.schema import (
+    CREATE_MESSAGES_TABLE_SQL,
+    CREATE_ROOMS_TABLE_SQL,
+    DROP_MESSAGES_TABLE_SQL,
+    DROP_ROOMS_TABLE_SQL,
 )
 
 
 def create_tables(engine: Engine) -> None:
-    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text(CREATE_ROOMS_TABLE_SQL))
+        connection.execute(text(CREATE_MESSAGES_TABLE_SQL))
 
 
 def drop_tables(engine: Engine) -> None:
-    metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text(DROP_MESSAGES_TABLE_SQL))
+        connection.execute(text(DROP_ROOMS_TABLE_SQL))

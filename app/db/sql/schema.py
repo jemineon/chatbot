@@ -1,0 +1,23 @@
+CREATE_ROOMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS rooms (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+CREATE_MESSAGES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    room_id INT NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    message_order INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_messages_room_id FOREIGN KEY (room_id) REFERENCES rooms(id),
+    CONSTRAINT uq_messages_room_id_message_order UNIQUE (room_id, message_order)
+)
+"""
+
+DROP_MESSAGES_TABLE_SQL = "DROP TABLE IF EXISTS messages"
+DROP_ROOMS_TABLE_SQL = "DROP TABLE IF EXISTS rooms"

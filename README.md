@@ -1,7 +1,7 @@
 # FastAPI + Docker + MySQL room/messages 학습 예제
 
-이 단계는 Docker Compose 환경에서 FastAPI가 MySQL에 연결하고, `rooms`와 `messages` 테이블을 SQLAlchemy Core 방식으로 직접 다루는 학습 예제입니다.  
-아직 ORM 모델, Session, Alembic, repository/service 레이어는 넣지 않았고, `engine`, `Table`, `MetaData` 중심으로 흐름을 익히는 데 집중합니다.
+이 단계는 Docker Compose 환경에서 FastAPI가 MySQL에 연결하고, `rooms`와 `messages` 테이블을 raw SQL `text()` 방식으로 직접 다루는 학습 예제입니다.  
+아직 ORM 모델, Session, Alembic, repository/service 레이어는 넣지 않았고, `engine`과 SQL 문장 자체를 읽는 데 집중합니다.
 
 ## 프로젝트 구조
 
@@ -13,12 +13,18 @@
 ├── README.md
 ├── app/
 │   ├── api/
+│   │   ├── chat.py
 │   │   ├── health.py
 │   │   ├── messages.py
 │   │   └── rooms.py
 │   ├── db/
 │   │   ├── connection.py
-│   │   └── schema.py
+│   │   ├── schema.py
+│   │   └── sql/
+│   │       ├── messages.py
+│   │       ├── rooms.py
+│   │       └── schema.py
+│   ├── chat_cli.py
 │   ├── main.py
 │   ├── test_messages_api.py
 │   └── test_messages_db.py
@@ -40,13 +46,19 @@ health, rooms, messages 라우터를 한곳에서 연결합니다.
 
 ### `app/api/rooms.py`
 
-room 생성과 조회를 담당하는 최소 API 파일입니다.  
-이제 메시지는 room에 속해야 하므로, 먼저 room을 만들 수 있어야 학습 흐름이 자연스럽습니다.
+room 생성, 조회, 삭제를 담당하는 API 파일입니다.  
+이제 메시지는 room에 속해야 하므로, 먼저 room을 만들고 필요할 때 특정 room을 확인하거나 삭제할 수 있어야 흐름이 자연스럽습니다.
 
 ### `app/api/messages.py`
 
 메시지 CRUD API를 담는 파일입니다.  
 메시지를 생성할 때 `message_order`를 자동으로 붙여 주고, room이 바뀌면 새 room 기준으로 다시 순서를 계산합니다.
+이 파일은 요청/응답 흐름에 집중하고, 실제 SQL 문장은 `app/db/sql/messages.py`에서 가져옵니다.
+
+### `app/api/chat.py`
+
+채팅 1턴을 처리하는 API 파일입니다.  
+user 메시지를 저장하고, 학습용 더미 assistant 응답을 만든 뒤 그 응답도 DB에 저장합니다.
 
 ### `app/db/connection.py`
 
@@ -56,7 +68,13 @@ DB 연결만 담당하는 파일입니다.
 ### `app/db/schema.py`
 
 테이블 구조만 담당하는 파일입니다.  
-`rooms`, `messages` 테이블과 foreign key, unique constraint를 한눈에 볼 수 있습니다.
+`CREATE TABLE`, `DROP TABLE` SQL을 한곳에 모아 두는 파일입니다.  
+테이블 구조와 제약조건을 SQL 문장 그대로 읽을 수 있습니다.
+
+### `app/db/sql/messages.py`, `app/db/sql/rooms.py`, `app/db/sql/schema.py`
+
+raw SQL 문장만 따로 모아 둔 파일들입니다.  
+API 파일에는 흐름만 남기고, 실제 SQL은 여기서 관리해서 읽기 쉽게 나눴습니다.
 
 ### `app/test_messages_db.py`
 
@@ -68,6 +86,11 @@ API를 거치지 않고, 테이블 규칙이 DB에서 실제로 동작하는지 
 실제 HTTP 요청으로 FastAPI API를 검증하는 통합 테스트입니다.  
 Swagger에서 따라하는 흐름과 가장 비슷합니다.
 
+### `app/chat_cli.py`
+
+터미널에서 간단히 채팅을 해볼 수 있는 CLI 파일입니다.  
+room을 하나 만들고, 입력을 반복해서 `/api/v1/chat`을 호출하는 chat loop를 제공합니다.
+
 ## 초보자용 핵심 개념
 
 ### Engine
@@ -75,21 +98,20 @@ Swagger에서 따라하는 흐름과 가장 비슷합니다.
 DB와 실제로 연결해 주는 객체입니다.  
 지금 단계에서는 "MySQL에 붙는 통로"라고 이해하면 충분합니다.
 
-### Table
+### text()
 
-파이썬 코드로 테이블 구조를 표현한 것입니다.  
-컬럼 이름, 타입, PK, foreign key, unique constraint를 코드로 적습니다.
-
-### MetaData
-
-테이블 정의들을 모아 두는 상자 같은 객체입니다.  
-`metadata.create_all(engine)`를 호출하면 여기에 등록된 테이블들을 실제 DB에 만들 수 있습니다.
+SQL 문장을 문자열 그대로 실행할 수 있게 해 주는 도구입니다.  
+지금 단계에서는 `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`을 모두 `text()`로 실행합니다.
 
 ## 이번 단계에서 배우는 포인트
 
+- raw SQL `text()`로 `SELECT`, `INSERT`, `UPDATE`, `DELETE`를 직접 쓰는 방법
+- raw SQL `CREATE TABLE`로 스키마를 직접 만드는 방법
+- SQL 문장을 API 파일 밖으로 분리해서 정리하는 방법
 - `rooms`와 `messages`를 foreign key로 연결하는 방법
 - 같은 room 안에서만 `message_order` 중복을 막는 방법
 - `message_order`를 사용자가 직접 주지 않고 서버가 자동 계산하는 방법
+- chat API 한 번 호출로 user/assistant 메시지를 같이 저장하는 방법
 - API에서 먼저 검사하고, DB 제약조건으로 한 번 더 막는 이중 방어 방식
 - DB 직접 테스트와 HTTP API 테스트를 나눠서 보는 방법
 
@@ -168,6 +190,15 @@ MySQL 연결이 되는지 `SELECT 1 AS ping`으로 확인합니다.
 
 현재 생성된 room 목록을 조회합니다.
 
+### `GET /api/v1/rooms/{room_id}`
+
+특정 room 1개를 조회합니다.
+
+### `DELETE /api/v1/rooms/{room_id}`
+
+특정 room 1개를 삭제합니다.  
+단, 그 room 안에 메시지가 남아 있으면 삭제를 막습니다. 학습 단계에서는 실수로 데이터를 같이 지우지 않도록 보수적으로 동작하게 두었습니다.
+
 ### `POST /api/v1/messages`
 
 메시지 1개를 저장합니다.  
@@ -210,12 +241,27 @@ GET /api/v1/messages?room_id=1
 
 메시지 1개를 삭제합니다.
 
+### `POST /api/v1/chat`
+
+채팅 1턴을 처리합니다.  
+user 메시지를 저장한 뒤, 학습용 assistant 응답을 만들고 그 응답도 저장합니다.
+
+예시 요청 본문:
+
+```json
+{
+  "room_id": 1,
+  "content": "안녕하세요"
+}
+```
+
 ## 추천 사용 순서
 
 1. `POST /api/v1/rooms` 실행
 2. 응답으로 받은 `id` 확인
-3. 그 값을 사용해서 `POST /api/v1/messages` 실행
-4. `GET /api/v1/messages?room_id=...` 로 조회
+3. `GET /api/v1/rooms/{id}` 로 단건 확인
+4. 그 값을 사용해서 `POST /api/v1/chat` 실행
+5. `GET /api/v1/messages?room_id=...` 로 전체 대화 조회
 
 ## 테이블 구조
 
@@ -249,9 +295,9 @@ GET /api/v1/messages?room_id=1
 이 방식의 학습 포인트:
 
 - DB 연결 코드와 테이블 정의 코드를 분리해서 볼 수 있습니다
-- SQLAlchemy ORM 없이도 테이블을 만들 수 있다는 점을 이해할 수 있습니다
+- SQLAlchemy ORM 없이도 raw SQL로 테이블을 만들 수 있다는 점을 이해할 수 있습니다
 - 제약조건이 API 검증과 DB 검증 양쪽에서 어떻게 동작하는지 볼 수 있습니다
-- 다음 단계에서 ORM이나 Alembic을 붙이기 전에 Core 방식의 기본 흐름을 먼저 익힐 수 있습니다
+- 다음 단계에서 ORM이나 Alembic을 붙이기 전에 SQL 기반 흐름을 먼저 익힐 수 있습니다
 
 ## 테스트 실행
 
@@ -266,6 +312,20 @@ docker compose exec api python -m unittest -v app.test_messages_db
 ```bash
 docker compose exec api python -m unittest -v app.test_messages_api
 ```
+
+## CLI 실행
+
+API 컨테이너가 떠 있는 상태에서, 호스트 터미널에서 아래처럼 실행할 수 있습니다.
+
+```bash
+python3 -m app.chat_cli
+```
+
+기본 명령:
+
+- 일반 텍스트 입력: user 메시지 전송
+- `/history`: 현재 room 대화 내역 보기
+- `/exit`: 종료
 
 ## 이번 단계에서 일부러 넣지 않은 것
 
