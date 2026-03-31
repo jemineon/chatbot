@@ -183,6 +183,7 @@ class MessagesApiIntegrationTestCase(unittest.TestCase):
             payload={
                 "room_id": room_id,
                 "content": "hello chat api",
+                "assistant_mode": "echo",
             },
         )
         self.debug(f"Chat response -> status={chat_status}, body={chat_body}")

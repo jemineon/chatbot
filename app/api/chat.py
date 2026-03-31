@@ -1,4 +1,5 @@
-from typing import Literal, Optional
+import os
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, status
 from fastapi.encoders import jsonable_encoder
@@ -17,7 +18,8 @@ from app.api.messages import (
     serialize_message,
 )
 from app.db.connection import create_db_engine
-from app.db.sql.messages import INSERT_MESSAGE_SQL
+from app.db.sql.messages import INSERT_MESSAGE_SQL, LIST_RECENT_MESSAGES_BY_ROOM_SQL
+from app.llm import DEFAULT_GEMINI_HISTORY_LIMIT, generate_assistant_reply
 
 
 router = APIRouter(tags=["Chat"])
@@ -26,14 +28,27 @@ router = APIRouter(tags=["Chat"])
 class ChatRequest(BaseModel):
     room_id: int = Field(ge=1)
     content: str = Field(min_length=1)
-    assistant_mode: Literal["echo"] = "echo"
+    assistant_mode: Optional[Literal["gemini", "echo"]] = None
 
 
-def build_assistant_reply(user_content: str, assistant_mode: str) -> str:
+def build_assistant_reply(user_content: str, assistant_mode: str, history_rows: list[dict[str, Any]]) -> str:
     if assistant_mode == "echo":
         return f"Echo: {user_content}"
 
-    return "Assistant mode is not supported."
+    return generate_assistant_reply(history_rows)
+
+
+def get_recent_room_history(connection: Any, room_id: int, history_limit: int) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        text(LIST_RECENT_MESSAGES_BY_ROOM_SQL),
+        {"room_id": room_id, "history_limit": history_limit},
+    ).mappings().all()
+    return list(reversed([dict(row) for row in rows]))
+
+
+def get_default_assistant_mode() -> str:
+    assistant_mode = os.getenv("CHAT_ASSISTANT_MODE", "gemini")
+    return assistant_mode if assistant_mode in {"gemini", "echo"} else "gemini"
 
 
 @router.post("/chat")
@@ -63,7 +78,10 @@ def chat(payload: ChatRequest) -> JSONResponse:
             user_message_id = int(user_result.lastrowid)
             user_message = fetch_message_by_id(connection, user_message_id)
 
-            assistant_reply = build_assistant_reply(payload.content, payload.assistant_mode)
+            assistant_mode = payload.assistant_mode or get_default_assistant_mode()
+            history_limit = DEFAULT_GEMINI_HISTORY_LIMIT
+            history_rows = get_recent_room_history(connection, payload.room_id, history_limit)
+            assistant_reply = build_assistant_reply(payload.content, assistant_mode, history_rows)
             assistant_message_order = get_next_message_order(connection, payload.room_id)
             assistant_result = connection.execute(
                 text(INSERT_MESSAGE_SQL),
@@ -105,6 +123,11 @@ def chat(payload: ChatRequest) -> JSONResponse:
         return build_db_error_response(
             exc,
             "Chat failed. Make sure the rooms/messages tables exist and the db container is running.",
+        )
+    except RuntimeError as exc:
+        return build_error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"Gemini call failed: {exc}",
         )
     finally:
         if engine is not None:

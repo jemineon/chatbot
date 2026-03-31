@@ -28,6 +28,14 @@ WHERE room_id = :room_id
 ORDER BY room_id, message_order, id
 """
 
+LIST_RECENT_MESSAGES_BY_ROOM_SQL = """
+SELECT id, room_id, role, message_order, content, created_at
+FROM messages
+WHERE room_id = :room_id
+ORDER BY message_order DESC, id DESC
+LIMIT :history_limit
+"""
+
 UPDATE_MESSAGE_SQL = """
 UPDATE messages
 SET room_id = :room_id,
