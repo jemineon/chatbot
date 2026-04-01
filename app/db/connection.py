@@ -1,9 +1,17 @@
+from contextlib import contextmanager
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
+
+
+def get_db_context() -> Dict[str, str]:
+    return {
+        "host": os.getenv("MYSQL_HOST", ""),
+        "database": os.getenv("MYSQL_DATABASE", ""),
+    }
 
 
 def get_database_url() -> str:
@@ -34,30 +42,48 @@ def create_db_engine() -> Engine:
     return create_engine(get_database_url(), pool_pre_ping=True)
 
 
-def check_db_connection() -> Dict[str, Any]:
-    host = os.getenv("MYSQL_HOST", "")
-    database = os.getenv("MYSQL_DATABASE", "")
-    engine: Optional[Engine] = None
+@contextmanager
+def db_connection() -> Iterator[Connection]:
+    engine = create_db_engine()
 
     try:
-        engine = create_db_engine()
-
         with engine.connect() as connection:
+            yield connection
+    finally:
+        engine.dispose()
+
+
+@contextmanager
+def db_transaction() -> Iterator[Connection]:
+    engine = create_db_engine()
+
+    try:
+        with engine.begin() as connection:
+            yield connection
+    finally:
+        engine.dispose()
+
+
+def check_db_connection() -> Dict[str, Any]:
+    db_context = get_db_context()
+
+    try:
+        with db_connection() as connection:
             ping = connection.execute(text("SELECT 1 AS ping")).scalar()
 
         return {
             "status": "ok",
             "message": "MySQL connection succeeded.",
-            "host": host,
-            "database": database,
+            "host": db_context["host"],
+            "database": db_context["database"],
             "ping": ping,
         }
     except ValueError as exc:
         return {
             "status": "error",
             "message": "Database settings are missing. Check your .env file and Docker Compose environment variables.",
-            "host": host,
-            "database": database,
+            "host": db_context["host"],
+            "database": db_context["database"],
             "error": str(exc),
         }
     except SQLAlchemyError as exc:
@@ -66,10 +92,7 @@ def check_db_connection() -> Dict[str, Any]:
         return {
             "status": "error",
             "message": "MySQL connection failed. Make sure the db container is running and the MYSQL_* values are correct.",
-            "host": host,
-            "database": database,
+            "host": db_context["host"],
+            "database": db_context["database"],
             "error": root_error,
         }
-    finally:
-        if engine is not None:
-            engine.dispose()

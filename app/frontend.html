@@ -340,33 +340,36 @@
   <script>
     const API_BASE = "/api/v1";
     const ROOM_STORAGE_KEY = "chatbot-project-room-id";
+    const EMPTY_ROOM_MESSAGE = "이 room에는 아직 메시지가 없습니다. 새 메시지를 보내보세요.";
 
-    const messagesEl = document.getElementById("messages");
-    const roomListEl = document.getElementById("room-list");
-    const roomLabelEl = document.getElementById("room-label");
-    const statusTextEl = document.getElementById("status-text");
-    const chatFormEl = document.getElementById("chat-form");
-    const chatInputEl = document.getElementById("chat-input");
-    const sendButtonEl = document.getElementById("send-button");
-    const newRoomButtonEl = document.getElementById("new-room-button");
+    const elements = {
+      messages: document.getElementById("messages"),
+      roomList: document.getElementById("room-list"),
+      roomLabel: document.getElementById("room-label"),
+      statusText: document.getElementById("status-text"),
+      chatForm: document.getElementById("chat-form"),
+      chatInput: document.getElementById("chat-input"),
+      sendButton: document.getElementById("send-button"),
+      newRoomButton: document.getElementById("new-room-button"),
+    };
 
     let currentRoomId = null;
     let currentRoomName = "";
     let isSending = false;
 
     function setStatus(message) {
-      statusTextEl.textContent = message;
+      elements.statusText.textContent = message;
     }
 
     function setRoomLabel(roomId, roomName) {
-      roomLabelEl.textContent = roomId ? `room: ${roomName} (#${roomId})` : "room: 없음";
+      elements.roomLabel.textContent = roomId ? `room: ${roomName} (#${roomId})` : "room: 없음";
     }
 
     function setSendingState(nextState) {
       isSending = nextState;
-      sendButtonEl.disabled = nextState;
-      newRoomButtonEl.disabled = nextState;
-      chatInputEl.disabled = nextState;
+      elements.sendButton.disabled = nextState;
+      elements.newRoomButton.disabled = nextState;
+      elements.chatInput.disabled = nextState;
     }
 
     async function requestJson(path, options = {}) {
@@ -400,15 +403,15 @@
 
       messageEl.appendChild(roleEl);
       messageEl.appendChild(contentEl);
-      messagesEl.appendChild(messageEl);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      elements.messages.appendChild(messageEl);
+      elements.messages.scrollTop = elements.messages.scrollHeight;
     }
 
     function renderHistory(items) {
-      messagesEl.innerHTML = "";
+      elements.messages.innerHTML = "";
 
       if (!items.length) {
-        appendMessage("system", "이 room에는 아직 메시지가 없습니다. 새 메시지를 보내보세요.");
+        appendMessage("system", EMPTY_ROOM_MESSAGE);
         return;
       }
 
@@ -423,13 +426,13 @@
     }
 
     function renderRoomList(items) {
-      roomListEl.innerHTML = "";
+      elements.roomList.innerHTML = "";
 
       if (!items.length) {
         const emptyEl = document.createElement("p");
         emptyEl.className = "room-empty";
         emptyEl.textContent = "아직 대화방이 없습니다. 새 대화를 눌러 시작해보세요.";
-        roomListEl.appendChild(emptyEl);
+        elements.roomList.appendChild(emptyEl);
         return;
       }
 
@@ -442,7 +445,7 @@
           <span class="room-meta">#${room.id}</span>
         `;
         buttonEl.addEventListener("click", () => selectRoomById(room.id));
-        roomListEl.appendChild(buttonEl);
+        elements.roomList.appendChild(buttonEl);
       });
     }
 
@@ -487,7 +490,7 @@
       renderHistory([]);
       await refreshRoomList();
       setStatus("새 room을 만들었습니다.");
-      chatInputEl.focus();
+      elements.chatInput.focus();
     }
 
     async function boot() {
@@ -534,10 +537,10 @@
       setStatus(`"${currentRoomName}" room에 메시지를 저장하고 응답을 받았습니다.`);
     }
 
-    chatFormEl.addEventListener("submit", async (event) => {
+    async function handleChatSubmit(event) {
       event.preventDefault();
 
-      const content = chatInputEl.value.trim();
+      const content = elements.chatInput.value.trim();
 
       if (!content || isSending) {
         return;
@@ -547,23 +550,23 @@
         setSendingState(true);
         setStatus("응답을 기다리는 중...");
         await sendMessage(content);
-        chatInputEl.value = "";
-        chatInputEl.focus();
+        elements.chatInput.value = "";
+        elements.chatInput.focus();
       } catch (error) {
         setStatus(`전송 실패: ${error.message}`);
       } finally {
         setSendingState(false);
       }
-    });
+    }
 
-    chatInputEl.addEventListener("keydown", (event) => {
+    function handleChatInputKeydown(event) {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        chatFormEl.requestSubmit();
+        elements.chatForm.requestSubmit();
       }
-    });
+    }
 
-    newRoomButtonEl.addEventListener("click", async () => {
+    async function handleNewRoomClick() {
       try {
         setSendingState(true);
         setStatus("새 room을 만드는 중...");
@@ -573,8 +576,15 @@
       } finally {
         setSendingState(false);
       }
-    });
+    }
 
+    function bindEvents() {
+      elements.chatForm.addEventListener("submit", handleChatSubmit);
+      elements.chatInput.addEventListener("keydown", handleChatInputKeydown);
+      elements.newRoomButton.addEventListener("click", handleNewRoomClick);
+    }
+
+    bindEvents();
     boot();
   </script>
 </body>

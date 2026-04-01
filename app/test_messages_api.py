@@ -104,6 +104,44 @@ class MessagesApiIntegrationTestCase(unittest.TestCase):
         self.assertEqual(status_code, 201, f"Expected HTTP 201 for room create, got {status_code}. Body: {body}")
         return int(body["data"]["id"])
 
+    def chat_once_via_api(self, room_id: int, content: str) -> Dict[str, Any]:
+        status_code, body = self.request_json(
+            "POST",
+            "/api/v1/chat",
+            payload={
+                "room_id": room_id,
+                "content": content,
+                "assistant_mode": "echo",
+            },
+        )
+        self.debug(f"Chat once response -> status={status_code}, body={body}")
+        self.assertEqual(status_code, 201, f"Expected HTTP 201 for chat, got {status_code}. Body: {body}")
+        return body
+
+    def list_room_messages_via_api(self, room_id: int) -> list[Dict[str, Any]]:
+        status_code, body = self.request_json("GET", f"/api/v1/messages?room_id={room_id}")
+        self.debug(f"Room messages via API -> room_id={room_id}, status={status_code}, body={body}")
+        self.assertEqual(status_code, 200, f"Expected HTTP 200 for room messages, got {status_code}. Body: {body}")
+        return body["items"]
+
+    def list_room_messages_via_db(self, room_id: int) -> list[Dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, room_id, role, message_order, content, created_at
+                    FROM messages
+                    WHERE room_id = :room_id
+                    ORDER BY message_order, id
+                    """
+                ),
+                {"room_id": room_id},
+            ).mappings().all()
+
+        items = [dict(row) for row in rows]
+        self.debug(f"Room messages via DB -> room_id={room_id}, rows={items}")
+        return items
+
     def test_health_db_endpoint(self) -> None:
         self.debug("Checking GET /api/v1/health/db before running CRUD flow.")
         status_code, body = self.request_json("GET", "/api/v1/health/db")
@@ -438,6 +476,91 @@ class MessagesApiIntegrationTestCase(unittest.TestCase):
         self.assertEqual(move_status, 200, f"Expected move update to succeed, got {move_status}. Body: {move_body}")
         self.assertEqual(move_body["data"]["room_id"], target_room_id, f"Expected room_id={target_room_id}, got {move_body}")
         self.assertEqual(move_body["data"]["message_order"], 2, f"Expected moved message_order=2 in target room, got {move_body}")
+
+    def test_chat_history_is_preserved_across_room_switches(self) -> None:
+        self.debug("Step 1: create the first room and exchange two chat turns.")
+        room_one_id = self.create_room_via_api(name="room one")
+        self.chat_once_via_api(room_one_id, "room one first")
+        self.chat_once_via_api(room_one_id, "room one second")
+
+        self.debug("Step 2: create the second room and exchange one chat turn.")
+        room_two_id = self.create_room_via_api(name="room two")
+        self.chat_once_via_api(room_two_id, "room two first")
+
+        self.debug("Step 3: load the first room again and verify its history before sending more messages.")
+        room_one_history_before = self.list_room_messages_via_api(room_one_id)
+        self.assertEqual(len(room_one_history_before), 4, f"Expected 4 messages in room one before returning, got {room_one_history_before}")
+        self.assertEqual(
+            [item["message_order"] for item in room_one_history_before],
+            [1, 2, 3, 4],
+            f"Expected room one message_order 1..4 before returning, got {room_one_history_before}",
+        )
+        self.assertEqual(
+            [item["content"] for item in room_one_history_before],
+            ["room one first", "Echo: room one first", "room one second", "Echo: room one second"],
+            f"Unexpected room one history before returning: {room_one_history_before}",
+        )
+
+        self.debug("Step 4: switch back to the first room and exchange one more chat turn.")
+        self.chat_once_via_api(room_one_id, "room one third")
+
+        self.debug("Step 5: verify API loads the correct history for both rooms after the switch.")
+        room_one_history_after = self.list_room_messages_via_api(room_one_id)
+        room_two_history_after = self.list_room_messages_via_api(room_two_id)
+
+        self.assertEqual(len(room_one_history_after), 6, f"Expected 6 messages in room one after returning, got {room_one_history_after}")
+        self.assertEqual(len(room_two_history_after), 2, f"Expected 2 messages in room two, got {room_two_history_after}")
+        self.assertEqual(
+            [item["message_order"] for item in room_one_history_after],
+            [1, 2, 3, 4, 5, 6],
+            f"Expected room one message_order 1..6, got {room_one_history_after}",
+        )
+        self.assertEqual(
+            [item["content"] for item in room_one_history_after],
+            [
+                "room one first",
+                "Echo: room one first",
+                "room one second",
+                "Echo: room one second",
+                "room one third",
+                "Echo: room one third",
+            ],
+            f"Unexpected room one history after returning: {room_one_history_after}",
+        )
+        self.assertEqual(
+            [item["content"] for item in room_two_history_after],
+            ["room two first", "Echo: room two first"],
+            f"Unexpected room two history after returning to room one: {room_two_history_after}",
+        )
+
+        self.debug("Step 6: verify the same state directly from the database.")
+        room_one_db_rows = self.list_room_messages_via_db(room_one_id)
+        room_two_db_rows = self.list_room_messages_via_db(room_two_id)
+
+        self.assertEqual(len(room_one_db_rows), 6, f"Expected 6 DB rows in room one, got {room_one_db_rows}")
+        self.assertEqual(len(room_two_db_rows), 2, f"Expected 2 DB rows in room two, got {room_two_db_rows}")
+        self.assertEqual(
+            [row["message_order"] for row in room_one_db_rows],
+            [1, 2, 3, 4, 5, 6],
+            f"Unexpected DB message_order values for room one: {room_one_db_rows}",
+        )
+        self.assertEqual(
+            [row["content"] for row in room_one_db_rows],
+            [
+                "room one first",
+                "Echo: room one first",
+                "room one second",
+                "Echo: room one second",
+                "room one third",
+                "Echo: room one third",
+            ],
+            f"Unexpected DB contents for room one: {room_one_db_rows}",
+        )
+        self.assertEqual(
+            [row["content"] for row in room_two_db_rows],
+            ["room two first", "Echo: room two first"],
+            f"Unexpected DB contents for room two: {room_two_db_rows}",
+        )
 
 
 if __name__ == "__main__":
