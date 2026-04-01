@@ -41,8 +41,8 @@ def build_assistant_reply(user_content: str, assistant_mode: str, history_rows: 
 
 
 def get_default_assistant_mode() -> str:
-    assistant_mode = os.getenv("CHAT_ASSISTANT_MODE", "gemini")
-    return assistant_mode if assistant_mode in {"gemini", "echo"} else "gemini"
+    assistant_mode = os.getenv("CHAT_ASSISTANT_MODE", "echo")
+    return assistant_mode if assistant_mode in {"gemini", "echo"} else "echo"
 
 
 @router.post("/chat")
